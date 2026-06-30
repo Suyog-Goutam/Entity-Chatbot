@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+@theme {
+  --color-hacker-bg: #0a0e0d; /* Near-black */
+  --color-hacker-panel: #0c1210;
+  --color-hacker-accent: #33ffb3; /* Muted phosphor green */
+  --color-hacker-accent-hover: #2ee6a8;
+  --color-hacker-text: #e0e0e0; /* High-contrast off-white/light gray */
+  --color-hacker-muted: #888888;
+  --font-mono: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  --font-sans: 'Inter', system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-hacker-bg text-hacker-text font-sans antialiased;
+    /* Subtle scanline texture overlay */
+    background-image: linear-gradient(
+      transparent 50%,
+      rgba(0, 0, 0, 0.25) 50%
+    );
+    background-size: 100% 4px;
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+  }
+}
+
+/* Custom styles for hacker aesthetic */
+@layer utilities {
+  .font-code {
+    @apply font-mono text-sm tracking-wide;
+  }
+  
+  .border-accent {
+    @apply border-hacker-accent/30;
+  }
+  
+  .glow-focus:focus {
+    @apply outline-none ring-1 ring-hacker-accent shadow-[0_0_8px_rgba(51,255,179,0.3)];
+  }
+}
+
+/* Blinking cursor animation */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.animate-blink {
+  animation: blink 1s step-end infinite;
+}
