@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Login } from './components/Login';
 import { auth } from './firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { initAI, routeMessage, callSpecialist, Category, MODELS } from './services/ai';
+import { routeMessage, callSpecialist, MODELS } from './services/ai';
+import type { Category } from './services/ai';
 
 // 1 hour in milliseconds
 const SESSION_DURATION = 60 * 60 * 1000; 
@@ -16,7 +17,6 @@ interface Message {
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [apiKey, setApiKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   
   // Chat state
@@ -40,24 +40,22 @@ function App() {
   // Monitor Firebase Auth state
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user && apiKey) {
+      if (user) {
         setIsAuthenticated(true);
-        initAI(apiKey);
-      } else if (!user) {
+      } else {
         setIsAuthenticated(false);
-        setApiKey(null);
       }
       setLoading(false);
     });
 
     return () => unsubscribe();
-  }, [apiKey]);
+  }, []);
 
   // Handle 1-hour auto-lock
   useEffect(() => {
-    let timeoutId: NodeJS.Timeout;
+    let timeoutId: ReturnType<typeof setTimeout>;
 
-    if (isAuthenticated && apiKey) {
+    if (isAuthenticated) {
       timeoutId = setTimeout(() => {
         handleLogout();
         alert('Session expired. Please initialize again.');
@@ -67,18 +65,15 @@ function App() {
     return () => {
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [isAuthenticated, apiKey]);
+  }, [isAuthenticated]);
 
-  const handleLoginSuccess = (key: string) => {
-    setApiKey(key);
+  const handleLoginSuccess = () => {
     setIsAuthenticated(true);
-    initAI(key);
   };
 
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      setApiKey(null);
       setIsAuthenticated(false);
       setMessages([{ id: 'initial', role: 'entity', content: 'System initialized. Secure connection established. How can I assist you?' }]);
     } catch (error) {
@@ -109,7 +104,6 @@ function App() {
       const entityMsgId = (Date.now() + 1).toString();
       setMessages(prev => [...prev, { id: entityMsgId, role: 'entity', content: '', modelUsed: specialistModel }]);
 
-      // We append text to the last message as it streams in
       await callSpecialist(userText, category, (chunk) => {
         setMessages(prev => {
           const newMessages = [...prev];
@@ -141,7 +135,7 @@ function App() {
     );
   }
 
-  if (!isAuthenticated || !apiKey) {
+  if (!isAuthenticated) {
     return <Login onLoginSuccess={handleLoginSuccess} />;
   }
 
@@ -178,14 +172,14 @@ function App() {
           {/* Message List */}
           <div className="flex-1 p-4 overflow-y-auto font-sans text-hacker-text space-y-6 scroll-smooth">
             {messages.map((msg) => (
-              <div key={msg.id} className={\`flex flex-col \${msg.role === 'user' ? 'items-end' : 'items-start'}\`}>
+              <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                 <div className="flex flex-col max-w-[85%]">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className={\`font-mono text-xs uppercase tracking-wider \${msg.role === 'user' ? 'text-hacker-muted' : 'text-hacker-accent'}\`}>
+                    <span className={`font-mono text-xs uppercase tracking-wider ${msg.role === 'user' ? 'text-hacker-muted' : 'text-hacker-accent'}`}>
                       {msg.role === 'user' ? 'User' : 'Entity'} {msg.role === 'entity' && '>'}
                     </span>
                   </div>
-                  <div className={\`p-3 rounded-lg \${msg.role === 'user' ? 'bg-hacker-accent/10 border border-hacker-accent/20 text-hacker-text' : 'bg-transparent text-hacker-text leading-relaxed whitespace-pre-wrap'}\`}>
+                  <div className={`p-3 rounded-lg ${msg.role === 'user' ? 'bg-hacker-accent/10 border border-hacker-accent/20 text-hacker-text' : 'bg-transparent text-hacker-text leading-relaxed whitespace-pre-wrap'}`}>
                     {msg.content}
                   </div>
                 </div>
@@ -203,7 +197,7 @@ function App() {
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 disabled={isProcessing}
-                className="w-full bg-hacker-bg border border-accent/50 rounded-full py-3 pl-12 pr-12 text-hacker-text font-sans focus:glow-focus transition-all disabled:opacity-50"
+                className="w-full bg-hacker-bg border border-accent/50 rounded-full py-3 pl-12 pr-12 text-hacker-text font-sans glow-focus transition-all disabled:opacity-50"
                 placeholder={isProcessing ? "Processing..." : "Enter command or query..."}
                 autoFocus
               />

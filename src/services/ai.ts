@@ -1,16 +1,14 @@
-import OpenAI from 'openai';
-
 // Define the categories our router can output
 export type Category = 'reasoning' | 'coding' | 'casual' | 'emotional' | 'vision' | 'image_gen';
 
-// Model definitions based on the roster
-export const MODELS = {
-  router: 'meta/llama-4-maverick-17b-128e-instruct', // Using the specific ID from your NVIDIA dashboard
-  reasoning: 'deepseek-ai/deepseek-v4',
-  coding: 'qwen/qwen3-coder-480b',
-  casual: 'mistralai/mistral-large-3',
-  emotional: 'mistralai/mistral-large-3',
-  vision: 'nvidia/nemotron-3-nano-omni',
+// Model definitions based on the roster (verified against live NVIDIA catalog)
+export const MODELS: Record<string, string> = {
+  router: 'meta/llama-4-maverick-17b-128e-instruct',
+  reasoning: 'deepseek-ai/deepseek-v4-pro',
+  coding: 'meta/llama-3.3-70b-instruct',
+  casual: 'mistralai/mistral-large-3-675b-instruct-2512',
+  emotional: 'mistralai/mistral-large-3-675b-instruct-2512',
+  vision: 'meta/llama-3.2-90b-vision-instruct',
   image_gen: 'black-forest-labs/flux.2-klein-4b',
 };
 
@@ -23,29 +21,40 @@ You avoid generic conversational filler (e.g., "Sure, I can help with that!").
 Respond directly and accurately to the user's prompt.
 `;
 
-// Initialize the OpenAI client configured for NVIDIA NIM
-let openai: OpenAI | null = null;
+// Determine the API base URL:
+// In development (Vite), use the Vite dev proxy or direct localhost.
+// In production (Vercel), use relative path which hits the Vercel serverless function.
+const API_URL = '/api/chat';
 
-export const initAI = (apiKey: string) => {
-  openai = new OpenAI({
-    apiKey: apiKey,
-    baseURL: 'https://integrate.api.nvidia.com/v1',
-    dangerouslyAllowBrowser: true, // Required since we are calling directly from the browser
+/**
+ * Makes a chat completion request through our secure Vercel backend proxy.
+ */
+async function chatCompletion(
+  model: string,
+  messages: { role: string; content: string }[],
+  options: { max_tokens?: number; temperature?: number; stream?: boolean } = {}
+) {
+  const { max_tokens = 1024, temperature = 0.7, stream = false } = options;
+
+  const response = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, messages, max_tokens, temperature, stream }),
   });
-};
 
-const getClient = () => {
-  if (!openai) throw new Error('AI Client not initialized. Missing API Key.');
-  return openai;
-};
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(`API Error ${response.status}: ${errorData}`);
+  }
+
+  return response;
+}
 
 /**
  * Step 1: The Router
  * Classifies the user's message into one of the specialized categories.
  */
 export const routeMessage = async (message: string): Promise<Category> => {
-  const client = getClient();
-  
   const systemPrompt = `
 You are a highly efficient routing system. Your ONLY job is to classify the user's message into exactly ONE of the following categories:
 - reasoning: Math, logic, science, complex problem solving, analysis.
@@ -59,77 +68,102 @@ You must respond with ONLY the category word. No punctuation, no explanation.
   `.trim();
 
   try {
-    const response = await client.chat.completions.create({
-      model: MODELS.router,
-      messages: [
+    const response = await chatCompletion(
+      MODELS.router,
+      [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: message }
+        { role: 'user', content: message },
       ],
-      max_tokens: 10,
-      temperature: 0.1, // Low temp for highly deterministic routing
-    });
+      { max_tokens: 10, temperature: 0.1 }
+    );
 
-    const category = response.choices[0]?.message?.content?.trim().toLowerCase() || 'casual';
-    
-    // Validate the output just in case the model hallucinates
+    const data = await response.json();
+    const category = data.choices?.[0]?.message?.content?.trim().toLowerCase() || 'casual';
+
     const validCategories: Category[] = ['reasoning', 'coding', 'casual', 'emotional', 'vision', 'image_gen'];
     if (validCategories.includes(category as Category)) {
       return category as Category;
     }
-    
-    return 'casual'; // Fallback
+
+    return 'casual';
   } catch (error) {
-    console.error("Router error:", error);
-    return 'casual'; // Fallback on error
+    console.error('Router error:', error);
+    return 'casual';
   }
 };
 
 /**
  * Step 2: The Specialist Call
- * Streams the response from the designated specialist model.
+ * Streams the response from the designated specialist model via our secure backend.
  */
 export const callSpecialist = async (
-  message: string, 
-  category: Category, 
+  message: string,
+  category: Category,
   onChunk: (text: string) => void
 ) => {
-  const client = getClient();
   const targetModel = MODELS[category];
 
-  // Category-specific instructions layered on top of the base persona
   let specificInstructions = '';
   if (category === 'coding') {
-    specificInstructions = 'Provide clean, well-documented code. Explain trade-offs if applicable. Use markdown blocks.';
+    specificInstructions = 'Provide clean, well-documented code. Explain trade-offs if applicable. Use markdown code blocks.';
   } else if (category === 'emotional') {
     specificInstructions = 'Be warmer and more empathetic than usual, but maintain the concise Entity persona. Do not be overly dramatic.';
   } else if (category === 'image_gen') {
-      // For now, we will handle image gen as a text response saying we are working on it, 
-      // actual image gen API call needs a different endpoint/logic
-      onChunk(`[SYSTEM: Initiating image generation sequence using ${targetModel}...]`);
-      return;
+    onChunk(`[SYSTEM: Image generation is not yet available. Describe what you need and I will assist with a text-based alternative.]`);
+    return;
   }
 
   const fullSystemPrompt = `${ENTITY_PERSONA}\n\n${specificInstructions}`.trim();
 
   try {
-    const stream = await client.chat.completions.create({
-      model: targetModel,
-      messages: [
+    // Use streaming via our backend proxy
+    const response = await chatCompletion(
+      targetModel,
+      [
         { role: 'system', content: fullSystemPrompt },
-        { role: 'user', content: message }
+        { role: 'user', content: message },
       ],
-      stream: true,
-      max_tokens: 1024,
-    });
+      { max_tokens: 1024, stream: true }
+    );
 
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      if (content) {
-        onChunk(content);
+    // Parse the SSE stream
+    const reader = response.body?.getReader();
+    if (!reader) {
+      onChunk('[SYSTEM ERROR: No response stream available.]');
+      return;
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (!trimmedLine || !trimmedLine.startsWith('data: ')) continue;
+
+        const data = trimmedLine.slice(6); // Remove "data: " prefix
+        if (data === '[DONE]') return;
+
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed.choices?.[0]?.delta?.content || '';
+          if (content) {
+            onChunk(content);
+          }
+        } catch {
+          // Skip malformed JSON chunks
+        }
       }
     }
   } catch (error) {
-    console.error("Specialist error:", error);
-    onChunk(`\n\n[SYSTEM ERROR: Specialist model ${targetModel} failed to respond.]`);
+    console.error('Specialist error:', error);
+    onChunk(`\n\n[SYSTEM ERROR: Specialist model ${targetModel} failed to respond. ${error}]`);
   }
 };

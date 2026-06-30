@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth, db } from '../firebase';
-import { doc, getDoc } from 'firebase/firestore';
-import { Lock, Unlock, Terminal } from 'lucide-react';
+import { auth } from '../firebase';
+import { Unlock, Terminal } from 'lucide-react';
 
 interface LoginProps {
-  onLoginSuccess: (apiKey: string) => void;
+  onLoginSuccess: () => void;
 }
 
 export function Login({ onLoginSuccess }: LoginProps) {
@@ -20,26 +19,19 @@ export function Login({ onLoginSuccess }: LoginProps) {
     setLoading(true);
 
     try {
-      // 1. Authenticate with Firebase
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
-
-      // 2. Fetch the NVIDIA API key from Firestore
-      const secretDoc = await getDoc(doc(db, 'admin', 'secrets'));
-      
-      if (secretDoc.exists()) {
-        const apiKey = secretDoc.data().NVIDIA_API_KEY;
-        if (apiKey) {
-          onLoginSuccess(apiKey);
-        } else {
-          setError('API key not found in database.');
-        }
-      } else {
-        setError('Secrets document not found. Make sure you completed Step 7.');
-      }
+      // Authenticate with Firebase — that's all we need now.
+      // The NVIDIA API key is safely stored in Vercel environment variables.
+      await signInWithEmailAndPassword(auth, email, password);
+      onLoginSuccess();
     } catch (err: any) {
       console.error(err);
-      setError(err.message || 'Failed to login');
+      if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password') {
+        setError('Access denied. Invalid credentials.');
+      } else if (err.code === 'auth/user-not-found') {
+        setError('Access denied. Unknown identifier.');
+      } else {
+        setError(err.message || 'Authentication failed.');
+      }
     } finally {
       setLoading(false);
     }
@@ -79,7 +71,7 @@ export function Login({ onLoginSuccess }: LoginProps) {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full bg-hacker-bg border border-accent/50 rounded p-3 text-hacker-text font-mono focus:glow-focus transition-all placeholder:text-hacker-muted/30"
+              className="w-full bg-hacker-bg border border-accent/50 rounded p-3 text-hacker-text font-mono glow-focus transition-all placeholder:text-hacker-muted/30"
               placeholder="user@network.local"
               required
             />
@@ -93,7 +85,7 @@ export function Login({ onLoginSuccess }: LoginProps) {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-hacker-bg border border-accent/50 rounded p-3 text-hacker-text font-mono focus:glow-focus transition-all placeholder:text-hacker-muted/30"
+              className="w-full bg-hacker-bg border border-accent/50 rounded p-3 text-hacker-text font-mono glow-focus transition-all placeholder:text-hacker-muted/30"
               placeholder="••••••••••••"
               required
             />
