@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInAnonymously } from 'firebase/auth';
 import { auth } from '../firebase';
 import { Unlock, Terminal } from 'lucide-react';
 
@@ -33,6 +33,32 @@ export function Login({ onLoginSuccess }: LoginProps) {
         setError(err.message || 'Authentication failed.');
       }
     } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGuestLogin = async () => {
+    setError('');
+    
+    // Check lockout
+    const lockoutUntil = localStorage.getItem('guest_lockout');
+    if (lockoutUntil) {
+      const remainingTime = parseInt(lockoutUntil) - Date.now();
+      if (remainingTime > 0) {
+        const minutes = Math.ceil(remainingTime / 60000);
+        setError(`Guest access locked. Try again in ${minutes} minute(s).`);
+        return;
+      } else {
+        localStorage.removeItem('guest_lockout');
+      }
+    }
+
+    setLoading(true);
+    try {
+      await signInAnonymously(auth);
+      onLoginSuccess();
+    } catch (err: any) {
+      setError(err.message || 'Failed to login as guest.');
       setLoading(false);
     }
   };
@@ -104,6 +130,21 @@ export function Login({ onLoginSuccess }: LoginProps) {
                 <span>Initialize</span>
               </>
             )}
+          </button>
+
+          <div className="relative flex items-center py-2">
+            <div className="flex-grow border-t border-accent/30"></div>
+            <span className="flex-shrink-0 mx-4 text-hacker-muted text-xs font-mono uppercase tracking-widest">or</span>
+            <div className="flex-grow border-t border-accent/30"></div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleGuestLogin}
+            disabled={loading}
+            className="w-full bg-transparent hover:bg-hacker-panel border border-accent/50 text-hacker-muted hover:text-hacker-text font-mono uppercase tracking-widest p-3 rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Guest Access
           </button>
         </form>
       </div>

@@ -15,6 +15,8 @@ interface Message {
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isGuest, setIsGuest] = useState(false);
+  const [guestMessageCount, setGuestMessageCount] = useState(0);
   const [loading, setLoading] = useState(true);
   
   // DB state
@@ -42,16 +44,25 @@ function App() {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setIsAuthenticated(true);
-        // Load history
-        const convs = await getConversations();
-        setConversations(convs);
-        if (convs.length > 0) {
-          loadConversation(convs[0].id);
+        setIsGuest(user.isAnonymous);
+        
+        if (user.isAnonymous) {
+          setGuestMessageCount(10);
+          setConversations([]);
+          setMessages([{ id: 'initial', role: 'entity', content: 'System initialized in GUEST MODE. Secure connection established. You have 10 queries remaining.' }]);
         } else {
-          setMessages([{ id: 'initial', role: 'entity', content: 'System initialized. Secure connection established. How can I assist you?' }]);
+          // Load history
+          const convs = await getConversations();
+          setConversations(convs);
+          if (convs.length > 0) {
+            loadConversation(convs[0].id);
+          } else {
+            setMessages([{ id: 'initial', role: 'entity', content: 'System initialized. Secure connection established. How can I assist you?' }]);
+          }
         }
       } else {
         setIsAuthenticated(false);
+        setIsGuest(false);
         setConversations([]);
         setCurrentConversationId(null);
       }
@@ -98,7 +109,7 @@ function App() {
 
     // 1. Database setup
     let convId = currentConversationId;
-    if (!convId) {
+    if (!convId && !isGuest) {
       convId = await createConversation(userText);
       setCurrentConversationId(convId);
       // Refresh sidebar
@@ -109,7 +120,14 @@ function App() {
     // 2. Add user message
     const userMsgId = Date.now().toString();
     setMessages(prev => [...prev, { id: userMsgId, role: 'user', content: userText }]);
-    await addMessageToDb(convId, 'user', userText);
+    if (!isGuest && convId) {
+      await addMessageToDb(convId, 'user', userText);
+    }
+    
+    // Decrement guest count
+    if (isGuest) {
+      setGuestMessageCount(prev => prev - 1);
+    }
     
     try {
       // 3. Routing phase
@@ -139,7 +157,7 @@ function App() {
       });
 
       // Save complete entity response to DB
-      if (fullResponse) {
+      if (fullResponse && !isGuest && convId) {
         await addMessageToDb(convId, 'entity', fullResponse);
       }
 
@@ -149,6 +167,15 @@ function App() {
     } finally {
       setIsProcessing(false);
       setActiveModelId('standby');
+      
+      // Handle guest limit reached
+      if (isGuest && guestMessageCount <= 1) {
+        setTimeout(() => {
+          alert('Guest query limit reached. Terminating session.');
+          localStorage.setItem('guest_lockout', (Date.now() + 10 * 60 * 1000).toString());
+          handleLogout();
+        }, 1000);
+      }
     }
   };
 
@@ -170,9 +197,13 @@ function App() {
         <h1 className="font-mono text-hacker-text uppercase tracking-widest text-lg flex items-center gap-2">
           <img src="/icon.png" alt="Entity" className="w-8 h-8 rounded-md border border-hacker-accent p-1" />
           System <span className="text-hacker-accent">Entity</span>
+          {isGuest && <span className="ml-2 text-xs bg-hacker-accent/20 text-hacker-accent px-2 py-1 rounded">GUEST: {guestMessageCount} left</span>}
         </h1>
         <button 
-          onClick={handleLogout}
+          onClick={() => {
+            if (isGuest) localStorage.setItem('guest_lockout', (Date.now() + 10 * 60 * 1000).toString());
+            handleLogout();
+          }}
           className="text-xs font-mono text-hacker-muted hover:text-hacker-accent transition-colors uppercase"
         >
           [ Terminate Session ]
@@ -181,31 +212,33 @@ function App() {
 
       <main className="flex-1 flex p-2 md:p-4 gap-4 overflow-hidden">
         {/* Sidebar History */}
-        <div className="w-64 border border-accent rounded bg-hacker-panel hidden md:flex flex-col">
-          <div className="p-3 border-b border-accent/50 flex justify-between items-center">
-            <span className="text-xs font-mono text-hacker-accent uppercase tracking-wider">Logs // History</span>
-            <button onClick={handleNewChat} className="text-hacker-accent hover:text-white transition-colors text-xl leading-none">+</button>
+        {!isGuest && (
+          <div className="w-64 border border-accent rounded bg-hacker-panel hidden md:flex flex-col">
+            <div className="p-3 border-b border-accent/50 flex justify-between items-center">
+              <span className="text-xs font-mono text-hacker-accent uppercase tracking-wider">Logs // History</span>
+              <button onClick={handleNewChat} className="text-hacker-accent hover:text-white transition-colors text-xl leading-none">+</button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              {conversations.length === 0 ? (
+                <div className="text-hacker-muted text-xs font-mono p-2 text-center opacity-50 mt-10">No history found.</div>
+              ) : (
+                conversations.map(conv => (
+                  <button
+                    key={conv.id}
+                    onClick={() => loadConversation(conv.id)}
+                    className={`w-full text-left p-2 rounded text-sm font-sans truncate transition-colors ${
+                      currentConversationId === conv.id 
+                        ? 'bg-hacker-accent/20 text-hacker-text border border-hacker-accent/30' 
+                        : 'text-hacker-muted hover:bg-hacker-bg hover:text-hacker-text'
+                    }`}
+                  >
+                    {conv.title}
+                  </button>
+                ))
+              )}
+            </div>
           </div>
-          <div className="flex-1 overflow-y-auto p-2 space-y-1">
-            {conversations.length === 0 ? (
-              <div className="text-hacker-muted text-xs font-mono p-2 text-center opacity-50 mt-10">No history found.</div>
-            ) : (
-              conversations.map(conv => (
-                <button
-                  key={conv.id}
-                  onClick={() => loadConversation(conv.id)}
-                  className={`w-full text-left p-2 rounded text-sm font-sans truncate transition-colors ${
-                    currentConversationId === conv.id 
-                      ? 'bg-hacker-accent/20 text-hacker-text border border-hacker-accent/30' 
-                      : 'text-hacker-muted hover:bg-hacker-bg hover:text-hacker-text'
-                  }`}
-                >
-                  {conv.title}
-                </button>
-              ))
-            )}
-          </div>
-        </div>
+        )}
 
         {/* Chat Area */}
         <div className="flex-1 border border-accent rounded bg-hacker-panel flex flex-col relative overflow-hidden">
