@@ -162,7 +162,7 @@ function App() {
       let fullResponse = '';
       
       const apiMessages = [...messages, { id: 'temp', role: 'user', content: userText }].map(m => ({
-        role: m.role,
+        role: m.role === 'entity' ? 'assistant' : m.role,
         content: m.content
       }));
 
