@@ -12,6 +12,9 @@ export const MODELS: Record<string, string> = {
   image_gen: 'black-forest-labs/flux.2-klein-4b',
 };
 
+// Fallback model for when we hit API rate limits (429) on the heavy models
+const FALLBACK_MODEL = 'meta/llama-3.1-8b-instruct';
+
 // The core Entity persona prompt that gets injected into every specialist call
 const ENTITY_PERSONA = `
 You are Entity, a personal multi-model AI assistant. 
@@ -112,55 +115,65 @@ export const callSpecialist = async (
 
   const fullSystemPrompt = `${ENTITY_PERSONA}\n\n${specificInstructions}`.trim();
 
+  const messages = [
+    { role: 'system', content: fullSystemPrompt },
+    { role: 'user', content: message },
+  ];
+
   try {
-    // Use streaming via our backend proxy
-    const response = await chatCompletion(
-      targetModel,
-      [
-        { role: 'system', content: fullSystemPrompt },
-        { role: 'user', content: message },
-      ],
-      { max_tokens: 1024, stream: true }
-    );
-
-    // Parse the SSE stream
-    const reader = response.body?.getReader();
-    if (!reader) {
-      onChunk('[SYSTEM ERROR: No response stream available.]');
-      return;
-    }
-
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // Keep incomplete line in buffer
-
-      for (const line of lines) {
-        const trimmedLine = line.trim();
-        if (!trimmedLine || !trimmedLine.startsWith('data: ')) continue;
-
-        const data = trimmedLine.slice(6); // Remove "data: " prefix
-        if (data === '[DONE]') return;
-
-        try {
-          const parsed = JSON.parse(data);
-          const content = parsed.choices?.[0]?.delta?.content || '';
-          if (content) {
-            onChunk(content);
-          }
-        } catch {
-          // Skip malformed JSON chunks
-        }
+    const response = await chatCompletion(targetModel, messages, { stream: true });
+    await processStreamResponse(response, onChunk);
+  } catch (error: any) {
+    if (error.message && error.message.includes('429')) {
+      onChunk(`\n\n*[SYSTEM WARNING: Primary model rate-limited. Falling back to backup system...]*\n\n`);
+      
+      try {
+        const fallbackResponse = await chatCompletion(FALLBACK_MODEL, messages, { stream: true });
+        await processStreamResponse(fallbackResponse, onChunk);
+      } catch (fallbackError: any) {
+        onChunk(`\n\n[SYSTEM ERROR: Both primary and fallback models failed. Please try again later.]`);
       }
+    } else {
+      console.error('Specialist error:', error);
+      onChunk(`\n\n[SYSTEM ERROR: Specialist model ${targetModel} failed to respond. ${error}]`);
     }
-  } catch (error) {
-    console.error('Specialist error:', error);
-    onChunk(`\n\n[SYSTEM ERROR: Specialist model ${targetModel} failed to respond. ${error}]`);
   }
 };
+
+/**
+ * Helper to process the stream
+ */
+async function processStreamResponse(response: Response, onChunk: (chunk: string) => void) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Failed to get stream reader');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine || !trimmedLine.startsWith('data: ')) continue;
+
+      const data = trimmedLine.slice(6);
+      if (data === '[DONE]') return;
+
+      try {
+        const parsed = JSON.parse(data);
+        const content = parsed.choices?.[0]?.delta?.content || '';
+        if (content) {
+          onChunk(content);
+        }
+      } catch {
+        // Skip malformed chunks
+      }
+    }
+  }
+}
