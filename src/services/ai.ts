@@ -97,7 +97,7 @@ You must respond with ONLY the category word. No punctuation, no explanation.
  * Streams the response from the designated specialist model via our secure backend.
  */
 export const callSpecialist = async (
-  message: string,
+  messageHistory: { role: string, content: string }[],
   category: Category,
   onChunk: (text: string) => void
 ) => {
@@ -117,7 +117,7 @@ export const callSpecialist = async (
 
   const messages = [
     { role: 'system', content: fullSystemPrompt },
-    { role: 'user', content: message },
+    ...messageHistory,
   ];
 
   try {

@@ -6,6 +6,7 @@ import { Trash2 } from 'lucide-react';
 import { routeMessage, callSpecialist, MODELS } from './services/ai';
 import { getConversations, getMessages, createConversation, addMessageToDb, deleteConversation } from './services/db';
 import type { Conversation } from './services/db';
+import { ModelInfoModal } from './components/ModelInfoModal';
 
 interface Message {
   id: string;
@@ -17,8 +18,13 @@ interface Message {
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isGuest, setIsGuest] = useState(false);
-  const [guestMessageCount, setGuestMessageCount] = useState(0);
+  const [guestMessageCount, setGuestMessageCount] = useState(10);
   const [loading, setLoading] = useState(true);
+  
+  // New UI States
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isModelInfoOpen, setIsModelInfoOpen] = useState(false);
+  const [sessionMessageCount, setSessionMessageCount] = useState(0);
   
   // DB state
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -118,6 +124,7 @@ function App() {
     const userText = inputValue.trim();
     setInputValue('');
     setIsProcessing(true);
+    setSessionMessageCount(prev => prev + 1);
 
     // 1. Database setup
     let convId = currentConversationId;
@@ -153,7 +160,13 @@ function App() {
       setMessages(prev => [...prev, { id: entityMsgId, role: 'entity', content: '', modelUsed: specialistModel }]);
 
       let fullResponse = '';
-      await callSpecialist(userText, category, (chunk) => {
+      
+      const apiMessages = [...messages, { id: 'temp', role: 'user', content: userText }].map(m => ({
+        role: m.role,
+        content: m.content
+      }));
+
+      await callSpecialist(apiMessages, category, (chunk) => {
         fullResponse += chunk;
         setMessages(prev => {
           const newMessages = [...prev];
@@ -205,27 +218,46 @@ function App() {
 
   return (
     <div className="h-[100dvh] bg-hacker-bg flex flex-col overflow-hidden">
-      <header className="border-b border-accent p-4 flex justify-between items-center bg-hacker-panel shrink-0">
+      <header className="border-b border-accent p-4 flex justify-between items-center bg-hacker-panel shrink-0 z-10">
         <h1 className="font-mono text-hacker-text uppercase tracking-widest text-lg flex items-center gap-2">
-          <img src="/icon.png" alt="Entity" className="w-8 h-8 rounded-md border border-hacker-accent p-1" />
+          <button 
+            onClick={() => !isGuest && setIsSidebarOpen(true)}
+            className="md:cursor-default"
+            title="Open History"
+          >
+            <img src="/icon.png" alt="Entity" className="w-8 h-8 rounded-md border border-hacker-accent p-1" />
+          </button>
           System <span className="text-hacker-accent">Entity</span>
-          {isGuest && <span className="ml-2 text-xs bg-hacker-accent/20 text-hacker-accent px-2 py-1 rounded">GUEST: {guestMessageCount} left</span>}
+          {isGuest && <span className="ml-2 text-xs bg-hacker-accent/20 text-hacker-accent px-2 py-1 rounded hidden sm:inline-block">GUEST: {guestMessageCount} left</span>}
         </h1>
-        <button 
-          onClick={() => {
-            if (isGuest) localStorage.setItem('guest_lockout', (Date.now() + 10 * 60 * 1000).toString());
-            handleLogout();
-          }}
-          className="text-xs font-mono text-hacker-muted hover:text-hacker-accent transition-colors uppercase"
-        >
-          [ Terminate Session ]
-        </button>
+        <div className="flex gap-2 sm:gap-4 items-center">
+          <button 
+            onClick={() => setIsModelInfoOpen(true)}
+            className="text-[10px] sm:text-xs font-mono text-hacker-muted hover:text-hacker-accent transition-colors uppercase"
+          >
+            [ Model Info ]
+          </button>
+          <button 
+            onClick={() => {
+              if (isGuest) localStorage.setItem('guest_lockout', (Date.now() + 10 * 60 * 1000).toString());
+              handleLogout();
+            }}
+            className="text-[10px] sm:text-xs font-mono text-hacker-muted hover:text-hacker-accent transition-colors uppercase"
+          >
+            [ Terminate Session ]
+          </button>
+        </div>
       </header>
 
-      <main className="flex-1 flex p-2 md:p-4 gap-4 overflow-hidden">
+      <main className="flex-1 flex p-2 md:p-4 gap-4 overflow-hidden relative">
+        {/* Mobile Sidebar Overlay */}
+        {isSidebarOpen && !isGuest && (
+          <div className="md:hidden fixed inset-0 bg-black/60 z-40" onClick={() => setIsSidebarOpen(false)} />
+        )}
+
         {/* Sidebar History */}
         {!isGuest && (
-          <div className="w-64 border border-accent rounded bg-hacker-panel hidden md:flex flex-col">
+          <div className={`fixed md:relative top-0 left-0 h-[100dvh] md:h-auto z-50 md:z-auto w-64 border border-accent rounded bg-hacker-panel flex flex-col transition-transform duration-300 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
             <div className="p-3 border-b border-accent/50 flex justify-between items-center">
               <span className="text-xs font-mono text-hacker-accent uppercase tracking-wider">Logs // History</span>
               <button onClick={handleNewChat} className="text-hacker-accent hover:text-white transition-colors text-xl leading-none">+</button>
@@ -237,7 +269,10 @@ function App() {
                 conversations.map(conv => (
                   <div key={conv.id} className={`flex items-center w-full rounded transition-colors ${currentConversationId === conv.id ? 'bg-hacker-accent/20 border border-hacker-accent/30' : 'hover:bg-hacker-bg'}`}>
                     <button
-                      onClick={() => loadConversation(conv.id)}
+                      onClick={() => {
+                        loadConversation(conv.id);
+                        setIsSidebarOpen(false);
+                      }}
                       className={`flex-1 text-left p-2 text-sm font-sans truncate ${currentConversationId === conv.id ? 'text-hacker-text' : 'text-hacker-muted hover:text-hacker-text'}`}
                     >
                       {conv.title}
@@ -305,6 +340,12 @@ function App() {
           </div>
         </div>
       </main>
+
+      <ModelInfoModal 
+        isOpen={isModelInfoOpen} 
+        onClose={() => setIsModelInfoOpen(false)} 
+        sessionMessages={sessionMessageCount} 
+      />
     </div>
   );
 }
