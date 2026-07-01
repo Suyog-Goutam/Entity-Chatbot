@@ -3,9 +3,8 @@ import { Login } from './components/Login';
 import { auth } from './firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { routeMessage, callSpecialist, MODELS } from './services/ai';
-
-// 1 hour in milliseconds
-const SESSION_DURATION = 60 * 60 * 1000; 
+import { getConversations, getMessages, createConversation, addMessageToDb } from './services/db';
+import type { Conversation } from './services/db';
 
 interface Message {
   id: string;
@@ -18,10 +17,12 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(true);
   
+  // DB state
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+
   // Chat state
-  const [messages, setMessages] = useState<Message[]>([
-    { id: 'initial', role: 'entity', content: 'System initialized. Secure connection established. How can I assist you?' }
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeModelId, setActiveModelId] = useState<string>('standby');
@@ -38,11 +39,21 @@ function App() {
 
   // Monitor Firebase Auth state
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setIsAuthenticated(true);
+        // Load history
+        const convs = await getConversations();
+        setConversations(convs);
+        if (convs.length > 0) {
+          loadConversation(convs[0].id);
+        } else {
+          setMessages([{ id: 'initial', role: 'entity', content: 'System initialized. Secure connection established. How can I assist you?' }]);
+        }
       } else {
         setIsAuthenticated(false);
+        setConversations([]);
+        setCurrentConversationId(null);
       }
       setLoading(false);
     });
@@ -50,21 +61,20 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // Handle 1-hour auto-lock
-  useEffect(() => {
-    let timeoutId: ReturnType<typeof setTimeout>;
-
-    if (isAuthenticated) {
-      timeoutId = setTimeout(() => {
-        handleLogout();
-        alert('Session expired. Please initialize again.');
-      }, SESSION_DURATION);
+  const loadConversation = async (id: string) => {
+    setCurrentConversationId(id);
+    const msgs = await getMessages(id);
+    if (msgs.length > 0) {
+      setMessages(msgs.map(m => ({ id: m.id, role: m.role, content: m.content })));
+    } else {
+      setMessages([{ id: 'initial', role: 'entity', content: 'System initialized. Secure connection established. How can I assist you?' }]);
     }
+  };
 
-    return () => {
-      if (timeoutId) clearTimeout(timeoutId);
-    };
-  }, [isAuthenticated]);
+  const handleNewChat = () => {
+    setCurrentConversationId(null);
+    setMessages([{ id: 'initial', role: 'entity', content: 'System initialized. Secure connection established. How can I assist you?' }]);
+  };
 
   const handleLoginSuccess = () => {
     setIsAuthenticated(true);
@@ -73,8 +83,6 @@ function App() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      setIsAuthenticated(false);
-      setMessages([{ id: 'initial', role: 'entity', content: 'System initialized. Secure connection established. How can I assist you?' }]);
     } catch (error) {
       console.error('Logout failed', error);
     }
@@ -88,34 +96,52 @@ function App() {
     setInputValue('');
     setIsProcessing(true);
 
-    // 1. Add user message
+    // 1. Database setup
+    let convId = currentConversationId;
+    if (!convId) {
+      convId = await createConversation(userText);
+      setCurrentConversationId(convId);
+      // Refresh sidebar
+      const convs = await getConversations();
+      setConversations(convs);
+    }
+
+    // 2. Add user message
     const userMsgId = Date.now().toString();
     setMessages(prev => [...prev, { id: userMsgId, role: 'user', content: userText }]);
+    await addMessageToDb(convId, 'user', userText);
     
     try {
-      // 2. Routing phase
+      // 3. Routing phase
       setActiveModelId('routing...');
       const category = await routeMessage(userText);
       const specialistModel = MODELS[category];
       setActiveModelId(`${category}: ${specialistModel}`);
 
-      // 3. Specialist response phase
+      // 4. Specialist response phase
       const entityMsgId = (Date.now() + 1).toString();
       setMessages(prev => [...prev, { id: entityMsgId, role: 'entity', content: '', modelUsed: specialistModel }]);
 
+      let fullResponse = '';
       await callSpecialist(userText, category, (chunk) => {
+        fullResponse += chunk;
         setMessages(prev => {
           const newMessages = [...prev];
           const lastMsgIndex = newMessages.length - 1;
           if (newMessages[lastMsgIndex].id === entityMsgId) {
             newMessages[lastMsgIndex] = {
               ...newMessages[lastMsgIndex],
-              content: newMessages[lastMsgIndex].content + chunk
+              content: fullResponse
             };
           }
           return newMessages;
         });
       });
+
+      // Save complete entity response to DB
+      if (fullResponse) {
+        await addMessageToDb(convId, 'entity', fullResponse);
+      }
 
     } catch (error) {
       console.error('Chat error:', error);
@@ -139,9 +165,10 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-hacker-bg flex flex-col">
-      <header className="border-b border-accent p-4 flex justify-between items-center bg-hacker-panel">
-        <h1 className="font-mono text-hacker-text uppercase tracking-widest text-lg">
+    <div className="h-[100dvh] bg-hacker-bg flex flex-col overflow-hidden">
+      <header className="border-b border-accent p-4 flex justify-between items-center bg-hacker-panel shrink-0">
+        <h1 className="font-mono text-hacker-text uppercase tracking-widest text-lg flex items-center gap-2">
+          <img src="/icon.png" alt="Entity" className="w-8 h-8 rounded-md border border-hacker-accent p-1" />
           System <span className="text-hacker-accent">Entity</span>
         </h1>
         <button 
@@ -152,16 +179,35 @@ function App() {
         </button>
       </header>
 
-      <main className="flex-1 flex p-4 gap-4 overflow-hidden">
+      <main className="flex-1 flex p-2 md:p-4 gap-4 overflow-hidden">
+        {/* Sidebar History */}
         <div className="w-64 border border-accent rounded bg-hacker-panel hidden md:flex flex-col">
-          <div className="p-2 border-b border-accent/50 text-xs font-mono text-hacker-accent uppercase tracking-wider">
-            Logs // History
+          <div className="p-3 border-b border-accent/50 flex justify-between items-center">
+            <span className="text-xs font-mono text-hacker-accent uppercase tracking-wider">Logs // History</span>
+            <button onClick={handleNewChat} className="text-hacker-accent hover:text-white transition-colors text-xl leading-none">+</button>
           </div>
-          <div className="flex-1 p-2 text-hacker-muted text-sm font-code flex items-center justify-center text-center opacity-50">
-            History sync offline.<br/>(Firestore integration pending)
+          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            {conversations.length === 0 ? (
+              <div className="text-hacker-muted text-xs font-mono p-2 text-center opacity-50 mt-10">No history found.</div>
+            ) : (
+              conversations.map(conv => (
+                <button
+                  key={conv.id}
+                  onClick={() => loadConversation(conv.id)}
+                  className={`w-full text-left p-2 rounded text-sm font-sans truncate transition-colors ${
+                    currentConversationId === conv.id 
+                      ? 'bg-hacker-accent/20 text-hacker-text border border-hacker-accent/30' 
+                      : 'text-hacker-muted hover:bg-hacker-bg hover:text-hacker-text'
+                  }`}
+                >
+                  {conv.title}
+                </button>
+              ))
+            )}
           </div>
         </div>
 
+        {/* Chat Area */}
         <div className="flex-1 border border-accent rounded bg-hacker-panel flex flex-col relative overflow-hidden">
           {/* Model Activity Indicator */}
           <div className="absolute top-2 right-2 text-[10px] font-mono text-hacker-accent/70 bg-hacker-accent/10 px-2 py-1 rounded border border-hacker-accent/30 z-10 shadow-sm backdrop-blur-sm">
@@ -172,13 +218,18 @@ function App() {
           <div className="flex-1 p-4 overflow-y-auto font-sans text-hacker-text space-y-6 scroll-smooth">
             {messages.map((msg) => (
               <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                <div className="flex flex-col max-w-[85%]">
+                <div className="flex flex-col max-w-[90%] md:max-w-[80%]">
                   <div className="flex items-center gap-2 mb-1">
                     <span className={`font-mono text-xs uppercase tracking-wider ${msg.role === 'user' ? 'text-hacker-muted' : 'text-hacker-accent'}`}>
                       {msg.role === 'user' ? 'User' : 'Entity'} {msg.role === 'entity' && '>'}
                     </span>
                   </div>
-                  <div className={`p-3 rounded-lg ${msg.role === 'user' ? 'bg-hacker-accent/10 border border-hacker-accent/20 text-hacker-text' : 'bg-transparent text-hacker-text leading-relaxed whitespace-pre-wrap'}`}>
+                  <div className={`p-3 rounded-lg ${
+                    msg.role === 'user' 
+                      ? 'bg-hacker-accent/10 border border-hacker-accent/20 text-hacker-text' 
+                      : 'bg-transparent text-hacker-text leading-relaxed whitespace-pre-wrap'
+                  }`}>
+                    {/* Render bold text for highlights properly or let it be raw markdown for now */}
                     {msg.content}
                   </div>
                 </div>
@@ -188,15 +239,15 @@ function App() {
           </div>
 
           {/* Input Area */}
-          <div className="p-4 border-t border-accent/30 bg-hacker-panel">
+          <div className="p-3 md:p-4 border-t border-accent/30 bg-hacker-panel shrink-0">
             <form onSubmit={handleSendMessage} className="relative flex items-center">
-              <span className="absolute left-4 font-mono text-hacker-accent">$&gt;</span>
+              <span className="absolute left-4 font-mono text-hacker-accent hidden md:inline">$&gt;</span>
               <input 
                 type="text" 
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 disabled={isProcessing}
-                className="w-full bg-hacker-bg border border-accent/50 rounded-full py-3 pl-12 pr-12 text-hacker-text font-sans glow-focus transition-all disabled:opacity-50"
+                className="w-full bg-hacker-bg border border-accent/50 rounded-full py-3 pl-4 md:pl-12 pr-12 text-hacker-text font-sans glow-focus transition-all disabled:opacity-50"
                 placeholder={isProcessing ? "Processing..." : "Enter command or query..."}
                 autoFocus
               />
