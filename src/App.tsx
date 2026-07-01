@@ -3,7 +3,6 @@ import { Login } from './components/Login';
 import { auth } from './firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { routeMessage, callSpecialist, MODELS } from './services/ai';
-import type { Category } from './services/ai';
 
 // 1 hour in milliseconds
 const SESSION_DURATION = 60 * 60 * 1000; 
