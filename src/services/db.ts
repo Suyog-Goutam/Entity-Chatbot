@@ -1,4 +1,4 @@
-import { collection, doc, addDoc, query, orderBy, serverTimestamp, updateDoc, getDocs } from 'firebase/firestore';
+import { collection, doc, addDoc, query, orderBy, serverTimestamp, updateDoc, getDocs, deleteDoc } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 
 export interface ChatMessage {
@@ -28,6 +28,15 @@ export const createConversation = async (firstMessage: string): Promise<string> 
   });
 
   return convRef.id;
+};
+
+// Delete a conversation
+export const deleteConversation = async (conversationId: string) => {
+  const user = auth.currentUser;
+  if (!user || user.isAnonymous || conversationId === 'guest_session') return;
+
+  const convRef = doc(db, 'users', user.uid, 'conversations', conversationId);
+  await deleteDoc(convRef);
 };
 
 // Add a message to a conversation

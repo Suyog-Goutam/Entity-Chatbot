@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Login } from './components/Login';
 import { auth } from './firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { Trash2 } from 'lucide-react';
 import { routeMessage, callSpecialist, MODELS } from './services/ai';
-import { getConversations, getMessages, createConversation, addMessageToDb } from './services/db';
+import { getConversations, getMessages, createConversation, addMessageToDb, deleteConversation } from './services/db';
 import type { Conversation } from './services/db';
 
 interface Message {
@@ -85,6 +86,17 @@ function App() {
   const handleNewChat = () => {
     setCurrentConversationId(null);
     setMessages([{ id: 'initial', role: 'entity', content: 'System initialized. Secure connection established. How can I assist you?' }]);
+  };
+
+  const handleDeleteChat = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (confirm('Are you sure you want to delete this chat?')) {
+      await deleteConversation(id);
+      setConversations(conversations.filter(c => c.id !== id));
+      if (currentConversationId === id) {
+        handleNewChat();
+      }
+    }
   };
 
   const handleLoginSuccess = () => {
@@ -223,17 +235,21 @@ function App() {
                 <div className="text-hacker-muted text-xs font-mono p-2 text-center opacity-50 mt-10">No history found.</div>
               ) : (
                 conversations.map(conv => (
-                  <button
-                    key={conv.id}
-                    onClick={() => loadConversation(conv.id)}
-                    className={`w-full text-left p-2 rounded text-sm font-sans truncate transition-colors ${
-                      currentConversationId === conv.id 
-                        ? 'bg-hacker-accent/20 text-hacker-text border border-hacker-accent/30' 
-                        : 'text-hacker-muted hover:bg-hacker-bg hover:text-hacker-text'
-                    }`}
-                  >
-                    {conv.title}
-                  </button>
+                  <div key={conv.id} className={`flex items-center w-full rounded transition-colors ${currentConversationId === conv.id ? 'bg-hacker-accent/20 border border-hacker-accent/30' : 'hover:bg-hacker-bg'}`}>
+                    <button
+                      onClick={() => loadConversation(conv.id)}
+                      className={`flex-1 text-left p-2 text-sm font-sans truncate ${currentConversationId === conv.id ? 'text-hacker-text' : 'text-hacker-muted hover:text-hacker-text'}`}
+                    >
+                      {conv.title}
+                    </button>
+                    <button 
+                      onClick={(e) => handleDeleteChat(e, conv.id)}
+                      className="p-2 text-hacker-muted hover:text-red-500 transition-colors shrink-0 opacity-50 hover:opacity-100"
+                      title="Delete chat"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 ))
               )}
             </div>
