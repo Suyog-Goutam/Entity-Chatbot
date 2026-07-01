@@ -10,9 +10,11 @@ export default async function handler(req) {
     });
   }
 
-  const apiKey = process.env.NVIDIA_API_KEY;
-  if (!apiKey) {
-    return new Response(JSON.stringify({ error: 'API key not configured' }), {
+  const rawKeys = process.env.NVIDIA_API_KEYS || process.env.NVIDIA_API_KEY || '';
+  const apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k.length > 0);
+  
+  if (apiKeys.length === 0) {
+    return new Response(JSON.stringify({ error: 'API keys not configured' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });
@@ -22,27 +24,50 @@ export default async function handler(req) {
     const body = await req.json();
     const { model, messages, max_tokens = 1024, temperature, stream = false } = body;
 
-    const nvidiaResponse = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'Accept': stream ? 'text/event-stream' : 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        max_tokens,
-        temperature,
-        stream,
-      }),
-    });
+    let nvidiaResponse = null;
+    let errorText = '';
 
-    if (!nvidiaResponse.ok) {
-      const errorText = await nvidiaResponse.text();
-      console.error('NVIDIA API Error:', nvidiaResponse.status, errorText);
-      return new Response(JSON.stringify({ error: `NVIDIA API error: ${nvidiaResponse.status}`, details: errorText }), {
-        status: nvidiaResponse.status,
+    // Loop through keys until one succeeds or all fail with 429
+    for (let i = 0; i < apiKeys.length; i++) {
+      const apiKey = apiKeys[i];
+      
+      nvidiaResponse = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'Accept': stream ? 'text/event-stream' : 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens,
+          temperature,
+          stream,
+        }),
+      });
+
+      if (nvidiaResponse.ok) {
+        // Success! Break out of the loop
+        break;
+      }
+
+      errorText = await nvidiaResponse.text();
+      
+      if (nvidiaResponse.status === 429) {
+        console.warn(`[Key Rotation] Key ${i+1}/${apiKeys.length} rate limited (429).`);
+        // If we have more keys to try, the loop continues to the next one
+        continue;
+      } else {
+        // A different error occurred (e.g. 400 Bad Request), don't bother retrying, just break and return it
+        break;
+      }
+    }
+
+    if (!nvidiaResponse || !nvidiaResponse.ok) {
+      console.error('NVIDIA API Error:', nvidiaResponse?.status, errorText);
+      return new Response(JSON.stringify({ error: `NVIDIA API error: ${nvidiaResponse?.status}`, details: errorText }), {
+        status: nvidiaResponse?.status || 500,
         headers: { 'Content-Type': 'application/json' },
       });
     }
